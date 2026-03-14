@@ -7,8 +7,11 @@ dist/
 # Config (contains API keys)
 config/config.php
 
-# IDE
+#Claude
 .claude/
+CLAUDE.md
+
+# IDE
 .idea/
 .vscode/
 
