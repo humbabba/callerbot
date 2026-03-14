@@ -1,0 +1,21 @@
+{
+  "name": "callerbot",
+  "version": "1.0.0",
+  "description": "",
+  "main": "app.js",
+  "scripts": {
+    "build": "npx @tailwindcss/cli -i assets/css/input.css -o dist/css/style.css --minify && npx esbuild assets/js/app.js --bundle --minify --outfile=dist/js/app.js",
+    "watch": "run-p watch:css watch:js",
+    "watch:css": "npx @tailwindcss/cli -i assets/css/input.css -o dist/css/style.css --watch",
+    "watch:js": "npx esbuild assets/js/app.js --bundle --outfile=dist/js/app.js --watch"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "@tailwindcss/cli": "^4.2.1",
+    "esbuild": "^0.27.4",
+    "npm-run-all2": "^8.0.4",
+    "tailwindcss": "^4.2.1"
+  }
+}

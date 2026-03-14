@@ -1,0 +1,20 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Config (contains API keys)
+config/config.php
+
+# IDE
+.claude/
+.idea/
+.vscode/
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Claude
+.claude/
