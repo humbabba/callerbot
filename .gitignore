@@ -9,7 +9,6 @@ config/config.php
 
 #Claude
 .claude/
-CLAUDE.md
 
 # IDE
 .idea/
