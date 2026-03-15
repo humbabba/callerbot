@@ -15,6 +15,9 @@ CLAUDE.md
 .idea/
 .vscode/
 
+# Database
+db/*.db
+
 # OS
 Thumbs.db
 .DS_Store

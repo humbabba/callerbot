@@ -1,10 +1,37 @@
 <?php
 
-header('Content-Type: application/json');
+header('Content-Type: text/event-stream');
+header('Cache-Control: no-cache');
+header('X-Accel-Buffering: no');
+
+// Disable output buffering for real-time SSE
+while (ob_get_level()) ob_end_clean();
+
+function emit(string $event, array $data): void {
+    echo "event: {$event}\n";
+    echo 'data: ' . json_encode($data) . "\n\n";
+    flush();
+}
+
+function emitStatus(string $text): void {
+    emit('status', ['text' => $text]);
+}
+
+function emitDone(array $data, string $userInput = ''): void {
+    if ($userInput !== '') {
+        $output = $data['reply'] ?? $data['error'] ?? '';
+        logQuery($userInput, $data['model'] ?? null, $data['function'] ?? null, $output);
+    }
+    emit('done', $data);
+}
+
+function emitError(string $errorMessage): void {
+    emit('done', ['error' => $errorMessage]);
+}
 
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
     http_response_code(405);
-    echo json_encode(['error' => 'Method not allowed']);
+    emitError('Method not allowed');
     exit;
 }
 
@@ -13,11 +40,12 @@ $message = trim($input['message'] ?? '');
 
 if ($message === '') {
     http_response_code(400);
-    echo json_encode(['error' => 'Message is required']);
+    emitError('Message is required');
     exit;
 }
 
 require __DIR__ . '/functions.php';
+require __DIR__ . '/../db/database.php';
 
 $config = require __DIR__ . '/../config/config.php';
 $apiKey = $config['groq_api_key'];
@@ -74,7 +102,10 @@ $tools = getOpenAIToolDeclarations();
 $model = null;
 $result = null;
 
+emitStatus('Routing to inference engine...');
+
 foreach ($models as $candidate) {
+    emitStatus("Connecting to {$candidate}...");
     $result = callGroq($apiKey, $candidate, $messages, $tools);
 
     if (!isset($result['error'])) {
@@ -88,29 +119,33 @@ foreach ($models as $candidate) {
             // Schema validation error — retry without tools so the model can clarify
             break;
         }
-        echo json_encode(['error' => $friendly]);
+        emitError($friendly);
         exit;
     }
+
+    emitStatus("Rate limited on {$candidate}, trying fallback...");
 }
 
 if (!$model) {
-    echo json_encode(['error' => 'Callerbot has hit its daily usage limit. Please check back in a little while — the limit resets automatically.']);
+    emitError('Callerbot has hit its daily usage limit. Please check back in a little while — the limit resets automatically.');
     exit;
 }
 
+emitStatus("Model locked: {$model}");
+
 // If the model selection loop broke due to a validation error, retry without tools
 if (isset($result['error'])) {
+    emitStatus('Schema mismatch — retrying without tools...');
     $result = callGroq($apiKey, $model, $messages, []);
     if (isset($result['error'])) {
-        echo json_encode(['error' => friendlyError($result['error']) ?? 'Something went wrong. Please try again in a moment.']);
+        emitError(friendlyError($result['error']) ?? 'Something went wrong. Please try again in a moment.');
         exit;
     }
     $choice = $result['choices'][0] ?? [];
-    $response = [
+    emitDone([
         'reply' => $choice['message']['content'] ?? '',
         'model' => $model,
-    ];
-    echo json_encode($response);
+    ], $message);
     exit;
 }
 
@@ -121,16 +156,17 @@ $calledFunction = null;
 
 for ($round = 0; $round < $maxRounds; $round++) {
     if (!$result) {
+        emitStatus($round === 0 ? 'Evaluating tool candidates...' : 'Re-evaluating with new context...');
         $result = callGroq($apiKey, $model, $messages, $activeTools);
         if (isset($result['error'])) {
             $friendly = friendlyError($result['error']);
             if ($friendly === null && !empty($activeTools)) {
-                // Schema validation error — retry this round without tools
+                emitStatus('Schema mismatch — retrying without tools...');
                 $activeTools = [];
                 $result = null;
                 continue;
             }
-            echo json_encode(['error' => $friendly ?? 'Something went wrong. Please try again in a moment.']);
+            emitError($friendly ?? 'Something went wrong. Please try again in a moment.');
             exit;
         }
     }
@@ -140,7 +176,12 @@ for ($round = 0; $round < $maxRounds; $round++) {
     $toolCalls = $assistantMessage['tool_calls'] ?? [];
 
     if (empty($toolCalls)) {
-        // No tool calls — return the text reply
+        if ($calledFunction) {
+            emitStatus('Composing response from tool data...');
+        } else {
+            emitStatus('No matching tool — composing direct response...');
+        }
+
         $response = [
             'reply' => $assistantMessage['content'] ?? '',
             'model' => $model,
@@ -148,7 +189,7 @@ for ($round = 0; $round < $maxRounds; $round++) {
         if ($calledFunction) {
             $response['function'] = $calledFunction;
         }
-        echo json_encode($response);
+        emitDone($response, $message);
         exit;
     }
 
@@ -160,12 +201,20 @@ for ($round = 0; $round < $maxRounds; $round++) {
     foreach ($toolCalls as $toolCall) {
         $fnName = $toolCall['function']['name'];
         $fnArgs = json_decode($toolCall['function']['arguments'], true) ?? [];
-        $fnResult = executeFunction($fnName, $fnArgs);
+        $argSummary = implode(', ', array_map(fn($k, $v) => "{$k}=\"{$v}\"", array_keys($fnArgs), $fnArgs));
+
+        emitStatus("Tool selected: {$fnName}({$argSummary})");
         $calledFunction = $fnName;
+
+        emitStatus("Executing {$fnName}...");
+        $fnResult = executeFunction($fnName, $fnArgs);
 
         $decoded = json_decode($fnResult, true);
         if (isset($decoded['error'])) {
             $anyToolFailed = true;
+            emitStatus("{$fnName} returned error — will try fallback...");
+        } else {
+            emitStatus("{$fnName} returned data — sending to model...");
         }
 
         $messages[] = [
@@ -182,9 +231,9 @@ for ($round = 0; $round < $maxRounds; $round++) {
     $result = null;
 }
 
-echo json_encode(['error' => 'Something went wrong processing that request. Try rephrasing or ask something else.']);
+emitError('Something went wrong processing that request. Try rephrasing or ask something else.');
 
-function friendlyError(string $raw): string {
+function friendlyError(string $raw): ?string {
     $lower = strtolower($raw);
 
     if (isQuotaError($raw)) {

@@ -2,28 +2,69 @@ document.addEventListener('DOMContentLoaded', () => {
     console.log('Callerbot has become self-aware');
     const typingSpeed = 15;
 
-    // Typewriter effect
+    /**
+     * Single typing engine. Returns { promise, cancel }.
+     * - el: element to type into (uses a textNode child)
+     * - text: string to type
+     * - opts.speed: base ms per char (default typingSpeed)
+     * - opts.jitter: random ms added per char (default speed * 2)
+     * - opts.onDone: callback when typing finishes
+     */
+    function typeText(el, text, opts = {}) {
+        const speed = opts.speed ?? typingSpeed;
+        const jitter = opts.jitter ?? speed * 2;
+        const onDone = opts.onDone ?? null;
+        let i = 0;
+        let timer = null;
+        let cancelled = false;
+
+        const promise = new Promise((resolve) => {
+            function step() {
+                if (cancelled) return resolve();
+                if (i < text.length) {
+                    el.textContent += text[i];
+                    i++;
+                    timer = setTimeout(step, speed + Math.random() * jitter);
+                } else {
+                    timer = null;
+                    if (onDone) onDone();
+                    resolve();
+                }
+            }
+            step();
+        });
+
+        return {
+            promise,
+            cancel() {
+                cancelled = true;
+                if (timer) {
+                    clearTimeout(timer);
+                    timer = null;
+                }
+            },
+        };
+    }
+
+    // Typewriter init for .typewriter elements
     document.querySelectorAll('.typewriter').forEach((el) => {
         const text = el.dataset.text || el.textContent;
         el.textContent = '';
         const delay = parseInt(el.dataset.typeDelay, 10) || 600;
-        let i = 0;
-
-        function type() {
-            if (i < text.length) {
-                el.textContent += text[i];
-                i++;
-                setTimeout(type, speed + Math.random() * jitter);
-            } else {
-                el.classList.add('done');
-                const chatLog = document.getElementById('chat-log');
-                if (chatLog) chatLog.classList.add('crt-on');
-            }
-        }
-
         const speed = parseInt(el.dataset.typeSpeed, 10) || typingSpeed;
         const jitter = parseInt(el.dataset.typeJitter, 10) || 60;
-        setTimeout(type, delay);
+
+        setTimeout(() => {
+            typeText(el, text, {
+                speed,
+                jitter,
+                onDone() {
+                    el.classList.add('done');
+                    const log = document.getElementById('chat-log');
+                    if (log) log.classList.add('crt-on');
+                },
+            });
+        }, delay);
     });
 
     // Chat
@@ -32,17 +73,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const greeting = document.getElementById('greeting');
     const history = [];
     let greetingDismissed = false;
-
-    const thinkingPhrases = [
-        'Parsing query...',
-        'Resolving intent...',
-        'Selecting model...',
-        'Establishing API handshake...',
-        'Tokenizing input...',
-        'Evaluating tool candidates...',
-        'Awaiting inference...',
-        'Decoding response stream...',
-    ];
+    let greetingTyper = null;
 
     input.addEventListener('keydown', (e) => {
         if (e.key !== 'Enter') return;
@@ -84,23 +115,21 @@ document.addEventListener('DOMContentLoaded', () => {
         line.classList.add('typing');
         chatLog.appendChild(line);
 
-        const escaped = escapeHtml(text);
-        let i = 0;
-
-        return new Promise((resolve) => {
-            function typeChar() {
-                if (i < text.length) {
-                    textNode.textContent += text[i];
-                    i++;
-                    chatLog.scrollTop = chatLog.scrollHeight;
-                    setTimeout(typeChar, speed + Math.random() * (speed * 2));
-                } else {
-                    line.classList.remove('typing');
-                    resolve(line);
-                }
-            }
-            typeChar();
+        const { promise } = typeText(textNode, text, {
+            speed,
+            jitter: speed * 2,
+            onDone() {
+                line.classList.remove('typing');
+            },
         });
+
+        // Keep chat scrolled during typing
+        const scrollInterval = setInterval(() => {
+            chatLog.scrollTop = chatLog.scrollHeight;
+        }, 50);
+        promise.then(() => clearInterval(scrollInterval));
+
+        return promise.then(() => line);
     }
 
     function appendStatus(text) {
@@ -116,39 +145,29 @@ document.addEventListener('DOMContentLoaded', () => {
         chatLog.querySelectorAll('.status-line').forEach(el => el.remove());
     }
 
-    let greetingTimeout = null;
-
     function setGreeting(text, speed = typingSpeed) {
         if (greetingDismissed) return;
-        if (greetingTimeout) {
-            clearTimeout(greetingTimeout);
-            greetingTimeout = null;
-        }
+        if (greetingTyper) greetingTyper.cancel();
 
         greeting.textContent = '';
         greeting.classList.remove('done');
-        let i = 0;
 
-        function type() {
-            if (i < text.length) {
-                greeting.textContent += text[i];
-                i++;
-                greetingTimeout = setTimeout(type, speed + Math.random() * (speed * 4));
-            } else {
+        greetingTyper = typeText(greeting, text, {
+            speed,
+            jitter: speed * 4,
+            onDone() {
                 greeting.classList.add('done');
-                greetingTimeout = null;
-            }
-        }
-
-        type();
+                greetingTyper = null;
+            },
+        });
     }
 
     function dismissGreeting() {
         if (greetingDismissed) return;
         greetingDismissed = true;
-        if (greetingTimeout) {
-            clearTimeout(greetingTimeout);
-            greetingTimeout = null;
+        if (greetingTyper) {
+            greetingTyper.cancel();
+            greetingTyper = null;
         }
         greeting.classList.add('greeting-out');
         greeting.addEventListener('animationend', () => {
@@ -160,18 +179,15 @@ document.addEventListener('DOMContentLoaded', () => {
         input.disabled = true;
         setGreeting('Working ...');
 
-        // Start the thinking animation in the chat log
-        let phraseIndex = 0;
-        const statusLine = appendStatus(thinkingPhrases[0]);
+        const statusLine = appendStatus('Connecting...');
 
-        const thinkingInterval = setInterval(() => {
-            phraseIndex = (phraseIndex + 1) % thinkingPhrases.length;
+        function updateStatus(text) {
             const span = statusLine.querySelector('span');
             if (span) {
-                span.innerHTML = `<span class="select-none">  </span>${escapeHtml(thinkingPhrases[phraseIndex])}`;
+                span.innerHTML = `<span class="select-none">  </span>${escapeHtml(text)}`;
             }
             chatLog.scrollTop = chatLog.scrollHeight;
-        }, 800 + Math.random() * 400);
+        }
 
         try {
             const res = await fetch('api/chat.php', {
@@ -180,24 +196,54 @@ document.addEventListener('DOMContentLoaded', () => {
                 body: JSON.stringify({ message, history }),
             });
 
-            clearInterval(thinkingInterval);
+            const reader = res.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = '';
+            let finalData = null;
+
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                buffer += decoder.decode(value, { stream: true });
+
+                // Parse SSE events from buffer
+                const parts = buffer.split('\n\n');
+                buffer = parts.pop();
+
+                for (const part of parts) {
+                    let event = 'message';
+                    let data = '';
+                    for (const line of part.split('\n')) {
+                        if (line.startsWith('event: ')) event = line.slice(7);
+                        else if (line.startsWith('data: ')) data = line.slice(6);
+                    }
+                    if (!data) continue;
+
+                    const parsed = JSON.parse(data);
+                    if (event === 'status') {
+                        updateStatus(parsed.text);
+                    } else if (event === 'done') {
+                        finalData = parsed;
+                    }
+                }
+            }
+
             removeStatusLines();
             dismissGreeting();
 
-            const data = await res.json();
-
-            if (data.error) {
-                await appendMessage('model', data.error, 4);
+            if (!finalData) {
+                await appendMessage('model', 'No response received from the server.', 4);
+            } else if (finalData.error) {
+                await appendMessage('model', finalData.error, 4);
             } else {
-                const meta = [data.model, data.function].filter(Boolean).join(' → ');
+                const meta = [finalData.model, finalData.function].filter(Boolean).join(' \u2192 ');
                 if (meta) {
                     appendStatus(`[${meta}]`);
                 }
-                await appendMessage('model', data.reply, 4);
-                history.push({ role: 'model', text: data.reply });
+                await appendMessage('model', finalData.reply, 4);
+                history.push({ role: 'model', text: finalData.reply });
             }
         } catch {
-            clearInterval(thinkingInterval);
             removeStatusLines();
             dismissGreeting();
             await appendMessage('model', 'Could not reach the server. Check your connection and try again.', 4);

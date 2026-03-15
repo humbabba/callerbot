@@ -59,6 +59,7 @@
 
         <p class="text-terminal-dim/60 text-sm text-center mt-4 select-none">
             &copy; <?= date('Y') ?> <a href="https://sublogicalendeavors.com/" target="_blank">Sublogical Endeavors</a>
+            &mdash; <a href="log.php" class="hover:text-terminal-dim transition-colors">Query Log</a>
         </p>
     </main>
     <script src="dist/js/app.js?v=<?= $config['version'] ?>"></script>
