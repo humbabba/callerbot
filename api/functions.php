@@ -511,11 +511,11 @@ function fn_travel_advisory(array $args): string {
     }
 
     $url = 'https://www.travel-advisory.info/api?countrycode=' . $countryCode;
-    $data = json_decode(curl_fetch($url), true);
+    $data = json_decode(curl_fetch($url, skipSslVerify: true), true);
     $info = $data['data'][$countryCode] ?? null;
 
     if (!$info) {
-        return json_encode(['error' => "No travel advisory found for: {$countryName}"]);
+        return json_encode(['error' => "Travel advisory service unavailable for {$countryName}. Try country_intel for general country safety context."]);
     }
 
     $score = $info['advisory']['score'] ?? 0;
@@ -625,13 +625,19 @@ function fn_local_time(array $args): string {
 
 // ─── UTILITY ────────────────────────────────────────────────────────────────
 
-function curl_fetch(string $url): string {
+function curl_fetch(string $url, bool $skipSslVerify = false): string {
     $ch = curl_init($url);
     curl_setopt_array($ch, [
         CURLOPT_RETURNTRANSFER => true,
         CURLOPT_TIMEOUT        => 10,
+        CURLOPT_FOLLOWLOCATION => true,
+        CURLOPT_MAXREDIRS      => 3,
         CURLOPT_HTTPHEADER     => ['User-Agent: Callerbot/1.0'],
     ]);
+    if ($skipSslVerify) {
+        curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+        curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, 0);
+    }
     $result = curl_exec($ch);
     curl_close($ch);
     return $result ?: '';

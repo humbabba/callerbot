@@ -35,25 +35,32 @@ NEVER use placeholders like [insert X] or [date from results]. Always use the ac
 
 When a user request matches one of your tools, call it. Use conversation history to fill in missing parameters — for example, if the user previously asked about Tokyo and then says "what\'s the weather like?", call get_weather with city "Tokyo". Always prefer calling an existing tool with inferred context over proposing a new function.
 
+CRITICAL: Resolve vague references like "local currency", "their money", "the capital", "there", etc. using conversation history. If the conversation is about Thailand and the user says "how much local money can I get for $500", call currency_convert with from="USD", to="THB", amount=500. Always resolve to concrete parameter values — never pass descriptions or vague text as arguments.
+
 FORMATTING: Your responses are displayed as plain text in a terminal UI. Do NOT use markdown tables, HTML tags, or <br>. Use short plain-text lists with dashes or bullet points. Keep responses concise and scannable.
 
-NEVER propose a function that duplicates an existing tool. If an existing tool can handle the request (even with parameters inferred from context), call it instead of proposing a new one.
+TOOL ERRORS: If a tool call fails or returns an error, try a DIFFERENT existing tool that might answer the question. For example, if travel_advisory fails for a country, call country_intel instead — it returns region, population, and other context the user may find useful. Only propose a new function if NO existing tool can help at all.
 
-When NO existing tool fits the request, DO NOT answer the question directly. Instead, propose a new GENERAL-PURPOSE function that could handle this request AND a broad category of similar requests. Think about the abstract category the request falls into — not the specific item. For example, if someone asks about a fictional weapon, propose a general "fictional item lookup" tool, not a weapon-specific one. If someone asks about a recipe, propose a general "recipe search" tool, not one for the specific dish.
+NEVER propose a function that duplicates or overlaps with an existing tool. If an existing tool can handle the request (even with parameters inferred from context), call it instead of proposing a new one. travel_warning, safety_check, etc. overlap with travel_advisory — do NOT propose these.
 
-Format your response exactly like this:
+When NO existing tool fits the request, follow this decision tree:
+
+1. Is the question related to travel research (destinations, transport, visas, packing, culture, food, accommodation, activities, etc.)?
+   - YES: Think about whether a free, public API or data source exists that could answer it (e.g. open government data, OpenStreetMap, Wikipedia, free REST APIs). If you can identify a real, free data source, propose a new tool:
 
 [FUNCTION PROPOSAL]
 Name: suggested_function_name
 Description: What it would do (general purpose, not specific to this one query)
 Parameters:
 - param_name (type): description
-- param_name (type): description
 Returns: What it would return
+Data source: The specific free API or data source this would use (must be real and free)
 Example: How this function would handle the current request
-Rationale: Why this general-purpose function would be useful across many scenarios
 
-This way every interaction demonstrates function calling — either by executing a tool or by proposing one.'],
+   - If you CANNOT identify a real free data source, respond naturally. Acknowledge what the user is asking and let them know it falls outside your current toolset. Briefly mention what you CAN help with (weather, forecasts, country info, currency conversion, travel advisories, destination guides, local time, holidays, word definitions).
+
+2. Is the question NOT related to travel research?
+   - Respond naturally and conversationally. Let the user know you are a travel research assistant and briefly mention the kinds of things you can help with. Be friendly, not robotic.'],
 ];
 foreach ($history as $turn) {
     $role = $turn['role'] === 'model' ? 'assistant' : $turn['role'];
@@ -76,13 +83,34 @@ foreach ($models as $candidate) {
     }
 
     if (!isQuotaError($result['error'])) {
-        echo json_encode(['error' => friendlyError($result['error'])]);
+        $friendly = friendlyError($result['error']);
+        if ($friendly === null) {
+            // Schema validation error — retry without tools so the model can clarify
+            break;
+        }
+        echo json_encode(['error' => $friendly]);
         exit;
     }
 }
 
 if (!$model) {
     echo json_encode(['error' => 'Callerbot has hit its daily usage limit. Please check back in a little while — the limit resets automatically.']);
+    exit;
+}
+
+// If the model selection loop broke due to a validation error, retry without tools
+if (isset($result['error'])) {
+    $result = callGroq($apiKey, $model, $messages, []);
+    if (isset($result['error'])) {
+        echo json_encode(['error' => friendlyError($result['error']) ?? 'Something went wrong. Please try again in a moment.']);
+        exit;
+    }
+    $choice = $result['choices'][0] ?? [];
+    $response = [
+        'reply' => $choice['message']['content'] ?? '',
+        'model' => $model,
+    ];
+    echo json_encode($response);
     exit;
 }
 
@@ -95,7 +123,14 @@ for ($round = 0; $round < $maxRounds; $round++) {
     if (!$result) {
         $result = callGroq($apiKey, $model, $messages, $activeTools);
         if (isset($result['error'])) {
-            echo json_encode(['error' => friendlyError($result['error'])]);
+            $friendly = friendlyError($result['error']);
+            if ($friendly === null && !empty($activeTools)) {
+                // Schema validation error — retry this round without tools
+                $activeTools = [];
+                $result = null;
+                continue;
+            }
+            echo json_encode(['error' => $friendly ?? 'Something went wrong. Please try again in a moment.']);
             exit;
         }
     }
@@ -121,11 +156,17 @@ for ($round = 0; $round < $maxRounds; $round++) {
     $messages[] = $assistantMessage;
 
     // Execute each tool call and append results
+    $anyToolFailed = false;
     foreach ($toolCalls as $toolCall) {
         $fnName = $toolCall['function']['name'];
         $fnArgs = json_decode($toolCall['function']['arguments'], true) ?? [];
         $fnResult = executeFunction($fnName, $fnArgs);
         $calledFunction = $fnName;
+
+        $decoded = json_decode($fnResult, true);
+        if (isset($decoded['error'])) {
+            $anyToolFailed = true;
+        }
 
         $messages[] = [
             'role'        => 'tool',
@@ -134,8 +175,10 @@ for ($round = 0; $round < $maxRounds; $round++) {
         ];
     }
 
-    // After first tool execution, stop offering tools so the model summarizes
-    $activeTools = [];
+    // Keep tools available if a tool returned an error, so the model can try a different one
+    if (!$anyToolFailed) {
+        $activeTools = [];
+    }
     $result = null;
 }
 
@@ -153,7 +196,7 @@ function friendlyError(string $raw): string {
     }
 
     if (str_contains($lower, 'validation failed') || str_contains($lower, 'did not match schema')) {
-        return 'Callerbot had trouble understanding that request. Try rephrasing your question.';
+        return null; // Signal to retry without tools
     }
 
     if (str_contains($lower, 'decommissioned') || str_contains($lower, 'no longer supported')) {

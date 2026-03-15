@@ -77,6 +77,12 @@
     content: '';
 }
 
+.typing > span::after {
+    content: '█';
+    animation: blink 0.7s step-end infinite;
+    color: #008f11;
+}
+
 #command-input:focus {
     box-shadow: 0 0 8px rgba(0, 255, 65, 0.3), inset 0 0 4px rgba(0, 255, 65, 0.1);
 }
@@ -88,4 +94,34 @@
 @keyframes scanline {
     0% { transform: translateY(-100%); }
     100% { transform: translateY(100vh); }
+}
+
+.greeting-out {
+    animation: greeting-dismiss 0.5s ease-in forwards;
+}
+
+@keyframes greeting-dismiss {
+    0%   { opacity: 1; transform: translateY(0); }
+    100% { opacity: 0; transform: translateY(-10px); height: 0; margin: 0; padding: 0; min-height: 0; overflow: hidden; }
+}
+
+#chat-log {
+    opacity: 0;
+}
+
+#chat-log.crt-on {
+    animation: crt-flicker 0.8s ease-out forwards;
+}
+
+@keyframes crt-flicker {
+    0%   { opacity: 0; }
+    10%  { opacity: 0.7; }
+    15%  { opacity: 0.2; }
+    25%  { opacity: 0.9; }
+    30%  { opacity: 0.4; }
+    40%  { opacity: 1; }
+    50%  { opacity: 0.6; }
+    60%  { opacity: 1; }
+    75%  { opacity: 0.85; }
+    100% { opacity: 1; }
 }

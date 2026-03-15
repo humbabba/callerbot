@@ -18,7 +18,7 @@
                 <span>CALLERBOT v<?= $config['version'] ?> &mdash; SESSION ACTIVE</span>
             </div>
 
-            <p id="status" class="typewriter text-lg md:text-xl glow mb-4 min-h-[1.75em]">Hello, how may I be of service?</p>
+            <p id="greeting" class="typewriter text-lg md:text-xl glow mb-4 min-h-[1.75em]">Hello, how may I be of service?</p>
 
             <div id="chat-log" class="text-sm max-h-94 overflow-y-auto mb-4">
                 <div class="text-terminal-dim/80 text-sm mb-3 leading-relaxed" id="intro">
